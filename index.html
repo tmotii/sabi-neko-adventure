@@ -18,7 +18,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap">
 <style>
 html { box-sizing: border-box; padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
-body { margin: 0; }
+body { margin: 0; touch-action: manipulation; }
 </style>
 <style>
 /* Layout: HUD bar, a 16:9 pixel stage, thumb pad under it on touch screens.
@@ -135,6 +135,16 @@ canvas { width: 100%; height: 100%; display: block; image-rendering: pixelated; 
 @media (max-width: 520px) {
   body { font-size: 13px; }
   .hud { padding: 4px 8px; }
+}
+/* 画面(ステージ)の高さに合わせて、オーバーレイの文字とボタンを縮める。小さいスマホでも、クリア画面がはみ出さない。 */
+@supports (width: 1cqh) {
+  .stage { container-type: size; }
+  .overlay { gap: 3cqh; padding: 4cqh 4cqw; }
+  .overlay h1 { font-size: clamp(16px, 11cqh, 42px); }
+  .overlay p { font-size: clamp(10px, 6cqh, 16px); line-height: 1.5; }
+  .overlay .big { font-size: clamp(12px, 7.5cqh, 24px); }
+  .btn { font-size: clamp(13px, 7.5cqh, 20px); padding: clamp(6px, 2.5cqh, 10px) clamp(14px, 6cqw, 28px); }
+  .btn.sm { font-size: clamp(11px, 6cqh, 16px); padding: clamp(5px, 2cqh, 8px) clamp(8px, 3cqw, 14px); }
 }
 </style>
 </head>
@@ -493,7 +503,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 /* ---------- state ---------- */
-const keys = { left: false, right: false, jump: false };
+const keys = { left: false, right: false, jump: false, jumpQ: false };
 let state = 'title', stageIdx = 0, S = STAGES[0], cat, cam, score, kib, lives, timeLeft, checkpoint, boxes, mice, parts, pops, hearts, clock, winAt, hudCache = '';
 // ステージごとのベストと、遊べるステージ数(クリアすると次が増える)。1面のベストは前の版の保存名をそのまま使う。
 let bests = STAGES.map(() => 0), unlocked = 1;
@@ -559,10 +569,11 @@ function update(dt) {
   const target = dir * 82, acc = dir ? 760 : 900;
   if (c.vx < target) c.vx = Math.min(target, c.vx + acc * dt); else if (c.vx > target) c.vx = Math.max(target, c.vx - acc * dt);
   if (dir) c.face = dir;
-  if (keys.jump && !c.jumpHeld) c.buf = 0.12;
+  if ((keys.jump && !c.jumpHeld) || keys.jumpQ) c.buf = 0.14;
+  keys.jumpQ = false;
   c.jumpHeld = keys.jump;
   c.buf -= dt;
-  c.coyote = c.ground ? 0.09 : c.coyote - dt;
+  c.coyote = c.ground ? 0.12 : c.coyote - dt;
   if (c.buf > 0 && c.coyote > 0) { c.vy = -232; c.ground = false; c.coyote = 0; c.buf = 0; c.cut = false; sfx.jump(); }
   if (!keys.jump && c.vy < -110 && !c.cut) { c.vy *= 0.5; c.cut = true; }
   c.vy = Math.min(c.vy + 620 * dt, 320);
@@ -700,7 +711,7 @@ function showOverlay(kind) {
     overlay.innerHTML = `<h1>${title}</h1>
       <p class="big">スコア ${pad6(score)}　カリカリ ×${kib}　ライフ ${hearts3(lives)}</p>
       <p>ベストスコア ${pad6(bests[stageIdx])}</p>${last ? '<p>ぜんぶのステージをクリアしたよ！</p>' : ''}
-      <div class="row">${last ? goBtn(0, 'もういっかい') + titleBtn : goBtn(stageIdx + 1, 'つぎのステージへ', '', lives)}</div>`;
+      <div class="row">${last ? goBtn(0, 'もういっかい') : goBtn(stageIdx + 1, 'つぎのステージへ', '', lives)}${titleBtn}</div>`;
   } else {
     overlay.innerHTML = `<h1>ゲームオーバー</h1><p>${kind.msg}</p>
       <p class="big">ステージ${stageIdx + 1}　スコア ${pad6(score)}</p><p>ステージ1からやりなおしだよ。</p>
@@ -721,28 +732,55 @@ function toTitle() {
 function startGame(i, carry) {
   initAudio(); loadStage(i, carry); state = 'play'; overlay.hidden = true; hudCache = '';
   musicOn = false; clearInterval(musicTimer); startMusic();
-  keys.left = keys.right = keys.jump = false;
+  resetInput();
 }
 
 /* ---------- input ---------- */
 const MAP = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', ArrowUp: 'jump', KeyW: 'jump', Space: 'jump', KeyZ: 'jump' };
+// 入力は「キーボード」と「画面のパッド」を別々に覚えて、あとで合わせる。
+// パッドは1本ずつの指(pointer)を追いかけ、指がボタンの上を動いても、2本同時でも正しく扱う。
+const kbdCodes = new Set(), touches = new Map(), padBtns = [...document.querySelectorAll('.pad button')];
+const KEYS = ['left', 'right', 'jump'];
+function syncKeys() {
+  const down = new Set([...touches.values()]);
+  for (const k of KEYS) {
+    const kb = [...kbdCodes].some(c => MAP[c] === k);
+    keys[k] = kb || down.has(k);
+  }
+  padBtns.forEach(b => b.classList.toggle('on', down.has(b.dataset.k)));
+}
+function resetInput() { kbdCodes.clear(); touches.clear(); keys.jumpQ = false; syncKeys(); }
 addEventListener('keydown', e => {
   const k = MAP[e.code];
   if (!k) return;
   e.preventDefault();
   if (!overlay.hidden) { if (e.code === 'Space' || e.code === 'Enter') { const b = overlay.querySelector('button:not([disabled])'); if (b) b.click(); } return; }
-  keys[k] = true;
+  if (k === 'jump' && !kbdCodes.has(e.code)) keys.jumpQ = true;
+  kbdCodes.add(e.code); syncKeys();
 });
-addEventListener('keyup', e => { const k = MAP[e.code]; if (k) { keys[k] = false; } });
-addEventListener('blur', () => { keys.left = keys.right = keys.jump = false; });
-document.querySelectorAll('.pad button').forEach(btn => {
-  const k = btn.dataset.k;
-  const on = e => { e.preventDefault(); btn.setPointerCapture(e.pointerId); keys[k] = true; btn.classList.add('on'); };
-  const off = () => { keys[k] = false; btn.classList.remove('on'); };
-  btn.addEventListener('pointerdown', on);
-  btn.addEventListener('pointerup', off); btn.addEventListener('pointercancel', off); btn.addEventListener('lostpointercapture', off);
-  btn.addEventListener('contextmenu', e => e.preventDefault());
-});
+addEventListener('keyup', e => { if (MAP[e.code]) { kbdCodes.delete(e.code); syncKeys(); } });
+addEventListener('blur', resetInput);
+const padEl = $('pad');
+function padKeyAt(x, y) {
+  const m = 6; // 指が少しずれても押せるよう、ボタンの外側も少し判定に入れる
+  for (const b of padBtns) {
+    const r = b.getBoundingClientRect();
+    if (x >= r.left - m && x <= r.right + m && y >= r.top - m && y <= r.bottom + m) return b.dataset.k;
+  }
+  return null;
+}
+function padTouch(e) {
+  const nk = padKeyAt(e.clientX, e.clientY), old = touches.get(e.pointerId);
+  if (nk === old && touches.has(e.pointerId)) return;
+  touches.set(e.pointerId, nk);
+  if (nk === 'jump' && old !== 'jump') keys.jumpQ = true;
+  syncKeys();
+}
+function padRelease(e) { if (touches.delete(e.pointerId)) syncKeys(); }
+padEl.addEventListener('pointerdown', e => { e.preventDefault(); try { padEl.setPointerCapture(e.pointerId); } catch (err) {} padTouch(e); });
+padEl.addEventListener('pointermove', e => { if (touches.has(e.pointerId)) { e.preventDefault(); padTouch(e); } });
+['pointerup', 'pointercancel', 'lostpointercapture'].forEach(t => padEl.addEventListener(t, padRelease));
+padEl.addEventListener('contextmenu', e => e.preventDefault());
 const muteBtn = $('mute');
 function applyMute() {
   muteBtn.textContent = muted ? 'おと OFF' : 'おと ON'; muteBtn.setAttribute('aria-pressed', String(muted));
