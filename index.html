@@ -495,26 +495,20 @@ document.addEventListener('visibilitychange', () => {
 /* ---------- state ---------- */
 const keys = { left: false, right: false, jump: false };
 let state = 'title', stageIdx = 0, S = STAGES[0], cat, cam, score, kib, lives, timeLeft, checkpoint, boxes, mice, parts, pops, hearts, clock, winAt, hudCache = '';
-// ステージごとのベストと、遊べるステージ数(クリアすると次が増える)。1面のベストは前の版の保存名をそのまま使う。
-let bests = STAGES.map(() => 0), unlocked = 1;
+// ステージごとのベスト。1面のベストは前の版の保存名をそのまま使う。
+let bests = STAGES.map(() => 0);
 const bestKey = i => i === 0 ? 'sabi-best' : 'sabi-best-' + (i + 1);
-try {
-  bests = STAGES.map((_, i) => +localStorage.getItem(bestKey(i)) || 0);
-  unlocked = Math.max(1, Math.min(STAGES.length, +localStorage.getItem('sabi-unlocked') || 1));
-} catch (e) {}
+try { bests = STAGES.map((_, i) => +localStorage.getItem(bestKey(i)) || 0); } catch (e) {}
 function saveBest() {
   if (score > bests[stageIdx]) { bests[stageIdx] = score; try { localStorage.setItem(bestKey(stageIdx), String(score)); } catch (e) {} }
 }
-function unlockNext() {
-  if (stageIdx + 2 > unlocked && stageIdx + 1 < STAGES.length) { unlocked = stageIdx + 2; try { localStorage.setItem('sabi-unlocked', String(unlocked)); } catch (e) {} }
-}
-
-function loadStage(i) {
+// carry: 前のステージから持ち越すライフ(なければ3)
+function loadStage(i, carry) {
   stageIdx = i; S = STAGES[i];
   boxes = S.boxes.map(([x, y]) => ({ x, y, used: false, bump: 0 }));
   mice = S.mice.map(([x, a, b, dir]) => ({ x, a, b, dir, squash: 0 }));
   parts = []; pops = []; hearts = [];
-  score = 0; kib = 0; lives = 3; timeLeft = S.time; checkpoint = 40; clock = 0; winAt = 0;
+  score = 0; kib = 0; lives = carry || 3; timeLeft = S.time; checkpoint = 40; clock = 0; winAt = 0;
   spawn();
 }
 function spawn() {
@@ -599,7 +593,7 @@ function update(dt) {
   if (c.x >= S.goal) {
     state = 'win'; winAt = clock; sfx.win(); stopMusic();
     score += Math.floor(timeLeft) * 10;
-    saveBest(); unlockNext();
+    saveBest();
     c.vx = 0;
     return;
   }
@@ -678,34 +672,28 @@ function hud() {
   $('hStage').textContent = 'ステージ' + (stageIdx + 1); $('hScore').textContent = s; $('hKib').textContent = k; $('hLife').textContent = l; $('hTime').textContent = t;
 }
 const pad6 = n => String(n).padStart(6, '0');
-const goBtn = (i, label, cls) => `<button class="btn ${cls || ''}" data-go="${i}" type="button">${label}</button>`;
-const titleBtn = '<button class="btn sm" data-title type="button">タイトルへ</button>';
+const hearts3 = n => '♥'.repeat(n) + '♡'.repeat(Math.max(3 - n, 0));
+const goBtn = (i, label, cls, carry) => `<button class="btn ${cls || ''}" data-go="${i}" data-carry="${carry || 0}" type="button">${label}</button>`;
 function showOverlay(kind) {
   overlay.hidden = false;
   const last = stageIdx === STAGES.length - 1;
   if (kind === 'title') {
-    if (unlocked <= 1) {
-      const bestLine = bests[0] ? `<p>ベストスコア ${pad6(bests[0])}</p>` : '';
-      overlay.innerHTML = `<h1>サビ猫アドベンチャー</h1>
-        <p>夕方のまちを歩く地域猫のサビ。ネズミをよけ、みぞを飛びこえ、ハテナ箱からカリカリを集めて、ゴハンのお皿までたどり着こう。</p>
-        ${bestLine}${goBtn(0, 'スタート')}`;
-    } else {
-      overlay.innerHTML = `<h1>サビ猫アドベンチャー</h1><p>ステージをえらんでね。</p>
-        <div class="row">${STAGES.map((st, i) => i < unlocked ? goBtn(i, `${i + 1} ${st.short}`, 'sm') : `<button class="btn sm" type="button" disabled>${i + 1} ？</button>`).join('')}</div>`;
-    }
+    const done = bests.map((b, i) => b ? `${i + 1}面 ${pad6(b)}` : '').filter(Boolean).join('　');
+    overlay.innerHTML = `<h1>サビ猫アドベンチャー</h1>
+      <p>夕方のまちを歩く地域猫のサビ。ネズミをよけ、みぞを飛びこえ、ハテナ箱からカリカリを集めて、ゴハンのお皿までたどり着こう。ライフは次のステージに持ちこされます。</p>
+      ${done ? `<p>ベストスコア　${done}</p>` : ''}${goBtn(0, 'スタート')}`;
   } else if (kind === 'win') {
     const title = last ? 'ゴハン ゲット！' : `ステージ${stageIdx + 1} クリア！`;
-    const extra = last ? '<p>ぜんぶのステージをクリアしたよ！</p>' : '';
     overlay.innerHTML = `<h1>${title}</h1>
-      <p class="big">スコア ${pad6(score)}　カリカリ ×${kib}</p>
-      <p>ベストスコア ${pad6(bests[stageIdx])}</p>${extra}
-      <div class="row">${last ? goBtn(stageIdx, 'もういっかい') + titleBtn : goBtn(stageIdx + 1, 'つぎのステージへ') + goBtn(stageIdx, 'もういっかい', 'sm')}</div>`;
+      <p class="big">スコア ${pad6(score)}　カリカリ ×${kib}　ライフ ${hearts3(lives)}</p>
+      <p>ベストスコア ${pad6(bests[stageIdx])}</p>${last ? '<p>ぜんぶのステージをクリアしたよ！</p>' : ''}
+      <div class="row">${last ? goBtn(0, 'もういっかい') : goBtn(stageIdx + 1, 'つぎのステージへ', '', lives)}</div>`;
   } else {
     overlay.innerHTML = `<h1>ゲームオーバー</h1><p>${kind.msg}</p>
-      <p class="big">スコア ${pad6(score)}</p><div class="row">${goBtn(stageIdx, 'もういっかい')}${unlocked > 1 ? titleBtn : ''}</div>`;
+      <p class="big">ステージ${stageIdx + 1}　スコア ${pad6(score)}</p><p>ステージ1からやりなおしだよ。</p>
+      <div class="row">${goBtn(0, 'もういっかい')}</div>`;
   }
-  overlay.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => startGame(+b.dataset.go)));
-  overlay.querySelectorAll('[data-title]').forEach(b => b.addEventListener('click', toTitle));
+  overlay.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => startGame(+b.dataset.go, +b.dataset.carry)));
   const first = overlay.querySelector('button:not([disabled])'); if (first) first.focus({ preventScroll: true });
 }
 function gameOver(msg) {
@@ -713,11 +701,8 @@ function gameOver(msg) {
   saveBest();
   showOverlay({ msg });
 }
-function toTitle() {
-  stopMusic(); loadStage(0); state = 'title'; hudCache = ''; showOverlay('title');
-}
-function startGame(i) {
-  initAudio(); loadStage(i); state = 'play'; overlay.hidden = true; hudCache = '';
+function startGame(i, carry) {
+  initAudio(); loadStage(i, carry); state = 'play'; overlay.hidden = true; hudCache = '';
   musicOn = false; clearInterval(musicTimer); startMusic();
   keys.left = keys.right = keys.jump = false;
 }
